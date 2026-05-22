@@ -3,34 +3,146 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>OSWhisper.cpp - Transcription</title>
+    <title>OSWhisper.cpp - Universiteit Utrecht</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Merriweather:wght@400;700&family=Open+Sans:wght@400;600&display=swap" rel="stylesheet">
     <style>
-        body { background-color: #f8f9fa; }
-        .container { max-width: 800px; margin-top: 50px; }
-        .card { border-radius: 15px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        :root {
+            --uu-yellow: #FFCD00;
+            --uu-black: #000000;
+            --uu-dark-gray: #333333;
+            --uu-light-gray: #f3f3f3;
+        }
+        body { 
+            background-color: #ffffff; 
+            font-family: 'Open Sans', sans-serif;
+            color: var(--uu-black);
+        }
+        .uu-header {
+            background-color: var(--uu-yellow);
+            padding: 20px 0;
+            border-bottom: 4px solid var(--uu-black);
+            margin-bottom: 40px;
+        }
+        .uu-logo-text {
+            font-family: 'Open Sans', sans-serif;
+            font-weight: 700;
+            font-size: 1.5rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--uu-black);
+            text-decoration: none;
+        }
+        h2, h4 { 
+            font-family: 'Merriweather', serif; 
+            font-weight: 700;
+            margin-bottom: 1.5rem;
+        }
+        .card { 
+            border: none;
+            border-radius: 0; 
+            box-shadow: none;
+            border-top: 1px solid #ddd;
+            padding-top: 2rem;
+        }
+        .btn-primary {
+            background-color: var(--uu-black);
+            border: none;
+            border-radius: 0;
+            padding: 10px 25px;
+            font-weight: 600;
+            text-transform: uppercase;
+            font-size: 0.9rem;
+        }
+        .btn-primary:hover {
+            background-color: var(--uu-dark-gray);
+        }
+        .btn-outline-info {
+            color: var(--uu-black);
+            border-color: var(--uu-black);
+            border-radius: 0;
+        }
+        .btn-outline-info:hover {
+            background-color: var(--uu-yellow);
+            border-color: var(--uu-yellow);
+            color: var(--uu-black);
+        }
+        .btn-success {
+            background-color: #8b0000; /* Dark red accent */
+            border: none;
+            border-radius: 0;
+        }
+        .badge {
+            border-radius: 0;
+            font-weight: 400;
+            padding: 5px 10px;
+        }
+        .bg-primary { background-color: var(--uu-black) !important; }
+        .bg-info { background-color: var(--uu-yellow) !important; }
+        .bg-warning { background-color: #ffd700 !important; }
+        
+        .table {
+            border-top: 1px solid var(--uu-black);
+        }
+        .table thead th {
+            border-bottom: 2px solid var(--uu-black);
+            text-transform: uppercase;
+            font-size: 0.8rem;
+            letter-spacing: 1px;
+        }
+        .form-control {
+            border-radius: 0;
+            border: 1px solid #ccc;
+        }
+        .form-control:focus {
+            border-color: var(--uu-yellow);
+            box-shadow: 0 0 0 0.25rem rgba(255, 205, 0, 0.25);
+        }
     </style>
 </head>
 <body>
-    <div class="container">
-        <div class="card p-4 mb-4">
-            <h2 class="text-center mb-4">OSWhisper.cpp</h2>
-            <div id="status"></div>
-            <form>
-                <div class="mb-3">
-                    <label for="file" class="form-label">Select Video/Audio File (.mkv, .mp4, .wav, etc.)</label>
-                    <input type="file" name="file" id="file" class="form-control" required>
-                </div>
-                <div class="d-grid">
-                    <button type="submit" class="btn btn-primary">Upload & Transcribe</button>
-                </div>
-            </form>
+    <header class="uu-header">
+        <div class="container">
+            <a href="#" class="uu-logo-text">Universiteit Utrecht</a>
         </div>
+    </header>
 
-        <div class="card p-4">
-            <h4>Recent Uploads</h4>
-            <div class="table-responsive">
-               
+    <div class="container">
+        <div class="row">
+            <div class="col-md-10 offset-md-1">
+                <div class="mb-5">
+                    <h2>Taalmodel transcriptie op basis van Whisper.cpp</h2>
+                    <p class="lead">Secure and efficient transcription for the UU academic community.</p>
+                    <div id="status"></div>
+                    <form class="mt-4">
+                        <div class="mb-3">
+                            <label for="file" class="form-label fw-bold">Select Video/Audio File</label>
+                            <input type="file" name="file" id="file" class="form-control" required>
+                            <div class="form-text mt-2 text-muted">Supported formats: .mp3, .mp4, .mkv, .wav</div>
+                        </div>
+                        <div class="">
+                            <button type="submit" class="btn btn-primary">Upload & Transcribe</button>
+                        </div>
+                    </form>
+                </div>
+
+                <div class="card p-0">
+                    <h4>Recent Uploads</h4>
+                    <div class="table-responsive mt-3">
+                       <table class="table table-hover">
+                           <thead>
+                               <tr>
+                                   <th>Filename</th>
+                                   <th>Stage</th>
+                                   <th>Action</th>
+                               </tr>
+                           </thead>
+                           <tbody id="file-list">
+                               <!-- Dynamically populated -->
+                           </tbody>
+                       </table>
+                    </div>
+                </div>
             </div>
         </div>
     </div>

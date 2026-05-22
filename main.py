@@ -4,31 +4,111 @@ import subprocess
 import base64
 import asyncio
 import uuid
+import logging
+import json
 from fastapi import FastAPI, UploadFile, File, Request, Depends, WebSocket, WebSocketDisconnect
 from fastapi.templating import Jinja2Templates
 from fastapi.responses import RedirectResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 
-# Ensure directories exist
+# Ensure functionality directories exist
 os.makedirs("uploads", exist_ok=True)
 os.makedirs("transcriptions", exist_ok=True)
 os.makedirs("encoded", exist_ok=True)
+os.makedirs("queue", exist_ok=True)
 os.makedirs("static", exist_ok=True)
+
+def setup_logging():
+    fmt = "%(levelname)-9s %(name)s - %(message)s"
+    logging.basicConfig(
+        level=logging.INFO,
+        format=fmt,
+        handlers=[
+            logging.StreamHandler(),
+            logging.FileHandler("app.log", encoding="utf-8")
+        ]
+    )
+
+setup_logging()
+logger = logging.getLogger("uvicorn.info")
+
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections: list[WebSocket] = []
+
+    async def connect(self, websocket: WebSocket):
+        await websocket.accept()
+        self.active_connections.append(websocket)
+
+    def disconnect(self, websocket: WebSocket):
+        if websocket in self.active_connections:
+            self.active_connections.remove(websocket)
+
+    async def broadcast(self, message: dict):
+        for connection in self.active_connections:
+            try:
+                await connection.send_json(message)
+            except Exception as e:
+                logger.error(f"Error broadcasting to connection: {e}")
+
+manager = ConnectionManager()
 
 app = FastAPI()
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
-async def encode_audio(input_path: str, output_path: str, websocket: WebSocket):
+# Global queue for transcription tasks
+transcription_queue = asyncio.Queue()
+currently_transcribing = set() # Track files actively being processed
+
+async def transcription_worker():
     """
-    Asynchronously runs ffmpeg to convert input to 16kHz mono wav.
+    Background worker that processes the transcription queue one by one.
     """
+    while True:
+        task_data = await transcription_queue.get()
+        encoded_path, file_id_base = task_data
+        currently_transcribing.add(file_id_base)
+        
+        try:
+            await transcribe_audio(encoded_path)
+        except Exception as e:
+            logger.error(f"Worker error: {e}")
+        finally:
+            currently_transcribing.discard(file_id_base)
+            transcription_queue.task_done()
+
+@app.on_event("startup")
+async def startup_event():
+    asyncio.create_task(transcription_worker())
+
+@app.on_event("shutdown")
+def cleanup_queue():
+    queue_dir = "./queue"
+    if os.path.exists(queue_dir):
+        shutil.rmtree(queue_dir)
+        os.makedirs(queue_dir)  # Recreate empty dir
+
+
+async def transcribe_audio(encoded_path: str):
+    """
+    Asynchronously runs whisper-cli.exe to transcribe the encoded audio.
+    """
+    filename_base = os.path.splitext(os.path.basename(encoded_path))[0]
+    output_base = os.path.join("transcriptions", filename_base)
+    
     command = [
-        "ffmpeg", "-y", "-i", input_path,
-        "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le",
-        output_path
+        "Release/whisper-cli.exe",
+        "-m", "ggml-large-v3-turbo.bin",
+        "-f", encoded_path,
+        "-l", "nl",
+        "-otxt",
+        "-of", output_base
     ]
-    try:
+
+    logger.info(f"starting transcription of {encoded_path}")
+    
+    try:      
         process = await asyncio.create_subprocess_exec(
             *command,
             stdout=asyncio.subprocess.PIPE,
@@ -37,90 +117,216 @@ async def encode_audio(input_path: str, output_path: str, websocket: WebSocket):
         stdout, stderr = await process.communicate()
         
         if process.returncode == 0:
-            await websocket.send_json({
+            logger.info(f"Transcribed file {encoded_path} to .txt")
+            # Cleanup queue file after success
+            if os.path.exists(encoded_path):
+                os.remove(encoded_path)
+            await manager.broadcast({
                 "type": "status",
-                "message": f"Encoding complete: {os.path.basename(output_path)}",
-                "status": "completed",
-                "encoded_file": os.path.basename(output_path)
+                "message": f"Transcription complete for {filename_base}.",
+                "status": "transcribed"
             })
         else:
-            error_msg = stderr.decode()
-            await websocket.send_json({
+            logger.error(f"Whisper error: {stderr.decode()}")
+            await manager.broadcast({
                 "type": "error",
-                "message": f"FFmpeg error: {error_msg}"
+                "message": f"Whisper error: {stderr.decode()}"
             })
+
     except Exception as e:
-        await websocket.send_json({
+        logger.error(f"Transcription error: {str(e)}")
+        await manager.broadcast({
             "type": "error",
-            "message": f"Processing error: {str(e)}"
+            "message": f"Transcription error: {str(e)}"
+        })
+
+async def queue_file(filename_base: str):
+    """
+    Moves an encoded file to the queue and adds it to the transcription queue.
+    """
+    input_filename = f"{filename_base}.wav"
+    input_path = os.path.join("encoded", input_filename)
+    queue_path = os.path.join("queue", input_filename)
+    
+    if os.path.exists(input_path):
+        shutil.copy(input_path, queue_path)
+        await transcription_queue.put((queue_path, filename_base))
+        logger.info(f"Queued file: {filename_base}")
+    else:
+        logger.error(f"File not found for queueing: {input_path}")
+
+
+
+async def encode_audio(input_path: str, output_path: str):
+    """
+    Asynchronously runs ffmpeg to convert input to 16kHz mono wav.
+    Handles errors and notifies the frontend via websocket.
+    """
+    try:
+        command = [
+            "ffmpeg", "-y", "-i", input_path,
+            "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le",
+            output_path
+        ]
+        
+        process = await asyncio.create_subprocess_exec(
+            *command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        stdout, stderr = await process.communicate()
+        
+        if process.returncode == 0:
+            logger.info(f"re-encoded file {input_path} to 16khz .wav")
+            if os.path.exists(input_path):
+                os.remove(input_path)
+            
+            await manager.broadcast({
+                "type": "status",
+                "message": f"Encoding complete for {os.path.basename(output_path)}.",
+                "status": "encoded"
+            })
+        else:
+            error_msg = stderr.decode().split('\n')[-2] if stderr else "Unknown ffmpeg error"
+            logger.error(f"ffmpeg error re-encoding {input_path}: {error_msg}")
+            
+            # Clean up input path even on failure to avoid clutter
+            if os.path.exists(input_path):
+                os.remove(input_path)
+
+            await manager.broadcast({
+                "type": "error",
+                "message": f"FFmpeg failed: {error_msg}"
+            })
+
+    except Exception as e:
+        logger.error(f"Unexpected error in encode_audio: {e}")
+        if os.path.exists(input_path):
+            os.remove(input_path)
+        await manager.broadcast({
+            "type": "error",
+            "message": f"Encoding failed: {str(e)}"
         })
 
 @app.get("/")
 async def index(request: Request):
     return templates.TemplateResponse(request, name="index.html")
 
+@app.post("/upload")
+async def upload_file(file: UploadFile = File(...)):
+    filename = file.filename
+    logger.info(f"received file {filename} via HTTP")
+    
+    if not filename:
+        return {"error": "No filename provided"}
+
+    file_id = str(uuid.uuid4())[:8]
+    safe_filename = f"{file_id}_{filename}"
+    filepath = os.path.join("uploads", safe_filename)
+    
+    try:
+        with open(filepath, "wb") as f:
+            shutil.copyfileobj(file.file, f)
+        
+        output_filename = f"{file_id}_{os.path.splitext(filename)[0]}.wav"
+        output_path = os.path.join("encoded", output_filename)
+        
+        await manager.broadcast({"type": "status", "message": f"Uploaded {filename}. Encoding..."})
+        asyncio.create_task(encode_audio(filepath, output_path))
+        
+        return {"status": "ok", "filename": filename, "file_id": file_id}
+    except Exception as e:
+        logger.error(f"Upload processing error: {e}")
+        return {"error": str(e)}
+
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
-    await websocket.accept()
+    await manager.connect(websocket)
     try:
         while True:
-            data = await websocket.receive_json()
-            
-            message_type = data.get("type")
-            match message_type:
-                case "upload":
-                    filename = data.get("filename")
-                    content_b64 = data.get("content")
-                    if filename and content_b64:
-                        # Use UUID to prevent conflicts
-                        file_id = str(uuid.uuid4())[:8]
-                        safe_filename = f"{file_id}_{filename}"
-                        filepath = os.path.join("uploads", safe_filename)
-                        
-                        content = base64.b64decode(content_b64)
-                        with open(filepath, "wb") as f:
-                            f.write(content)
-                        
-                        # Prepare output path in /encoded
-                        output_filename = f"{file_id}_{os.path.splitext(filename)[0]}.wav"
-                        output_path = os.path.join("encoded", output_filename)
-                        
-                        # Send acknowledgement
-                        await websocket.send_json({
-                            "type": "status", 
-                            "message": f"Uploaded {filename}. Starting encoding...",
-                            "filename": filename
-                        })
-                        
-                        # Run encoding in background (non-blocking)
-                        asyncio.create_task(encode_audio(filepath, output_path, websocket))
-                        
-                case "ping":
-                    await websocket.send_json({"type": "pong"})
-                case _:
-                    await websocket.send_json({"type": "error", "message": f"Unknown action: {message_type}"})
+            try:
+                data = await websocket.receive_text()
+                data = json.loads(data)
+                message_type = data.get("type")
+
+                match message_type:
+                    case "upload":
+                        # Legacy/small file upload via WS (optional, but we'll prioritize HTTP)
+                        filename = data.get("filename")
+                        content_b64 = data.get("content")
+                        logger.info(f"received file {filename} via WS")
+
+                        if filename and content_b64:
+                            file_id = str(uuid.uuid4())[:8]
+                            safe_filename = f"{file_id}_{filename}"
+                            filepath = os.path.join("uploads", safe_filename)
+                            try:
+                                content = base64.b64decode(content_b64)
+                                with open(filepath, "wb") as f:
+                                    f.write(content)
+                                output_filename = f"{file_id}_{os.path.splitext(filename)[0]}.wav"
+                                output_path = os.path.join("encoded", output_filename)
+                                await manager.broadcast({"type": "status", "message": f"Uploaded {filename}. Encoding..."})
+                                asyncio.create_task(encode_audio(filepath, output_path))
+                            except Exception as e:
+                                logger.error(f"Upload processing error: {e}")
+                                await websocket.send_json({"type": "error", "message": f"Failed to process upload: {str(e)}"})
+                    case "queue":
+                        filename = data.get("filename")
+                        if filename:
+                            filename_base = os.path.splitext(filename)[0]
+                            await queue_file(filename_base)
+                            await manager.broadcast({"type": "status", "message": f"Queued {filename}"})
+                    case "ping":
+                        await websocket.send_json({"type": "pong"})
+            except (ValueError, json.JSONDecodeError) as e:
+                logger.error(f"Invalid JSON received: {e}")
+                continue
+            except Exception as e:
+                if isinstance(e, WebSocketDisconnect):
+                    raise
+                logger.error(f"Error processing websocket message: {e}")
+                try:
+                    await websocket.send_json({"type": "error", "message": "Internal server error processing message"})
+                except:
+                    pass
     except WebSocketDisconnect:
-        print("Client disconnected")
+        manager.disconnect(websocket)
+        logger.info("Client disconnected")
     except Exception as e:
-        try:
-            await websocket.send_json({"type": "error", "message": str(e)})
-        except:
-            pass
+        manager.disconnect(websocket)
+        logger.error(f"WS Error: {e}")
+
+@app.get("/files")
+@app.get("/list_files")
+async def list_files():
+    file_status = {}
+    dirs = [
+        ("uploads", "uploaded"),
+        ("encoded", "encoded"),
+        ("queue", "queued"),
+        ("transcriptions", "transcription")
+    ]
+    for folder, status in dirs:
+        if not os.path.exists(folder): continue
+        for f in os.listdir(folder):
+            base, ext = os.path.splitext(f)
+            if folder == "transcriptions" and ext != ".txt": continue
+            effective_status = status
+            if base in currently_transcribing:
+                effective_status = "transcribing"
+            file_status[base] = {"filename": f, "status": effective_status, "folder": folder}
+    
+    result = list(file_status.values())
+    result.sort(key=lambda x: x['filename'], reverse=True)
+    return result
 
 @app.get("/download/{filename}")
 async def download_transcription(filename: str):
-    # Search in both transcriptions and encoded for convenience
-    paths = [
-        os.path.join("transcriptions", filename),
-        os.path.join("encoded", filename)
-    ]
+    paths = [os.path.join("transcriptions", filename), os.path.join("encoded", filename)]
     for path in paths:
         if os.path.exists(path):
-            return FileResponse(
-                path=path,
-                filename=filename,
-                media_type='application/octet-stream'
-            )
+            return FileResponse(path=path, filename=filename, media_type='application/octet-stream')
     return {"error": "File not found"}
 
 if __name__ == "__main__":

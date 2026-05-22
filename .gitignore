@@ -2,4 +2,13 @@
 uploads/*
 encoded/*
 transcriptions/*
+queue/*
+Release/*
 .env
+.odo/env
+.odo/odo-file-index.json
+*.pyc
+uploads/*
+encoded/*
+transcriptions/*
+queue/*

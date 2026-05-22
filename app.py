@@ -82,6 +82,15 @@ async def transcription_worker():
 async def startup_event():
     asyncio.create_task(transcription_worker())
 
+    # Check for a folder called "Release-1.8.4" (the whisper.cpp release)
+    if os.exists("Release\whisper-cli.exe"):
+        pass
+    else:
+
+
+
+
+
 @app.on_event("shutdown")
 def cleanup_queue():
     queue_dir = "./queue"

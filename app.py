@@ -6,10 +6,14 @@ import asyncio
 import uuid
 import logging
 import json
+import requests
+import zipfile
+import time
 from fastapi import FastAPI, UploadFile, File, Request, Depends, WebSocket, WebSocketDisconnect
 from fastapi.templating import Jinja2Templates
 from fastapi.responses import RedirectResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
+from huggingface_hub import hf_hub_download
 
 # Ensure functionality directories exist
 os.makedirs("uploads", exist_ok=True)
@@ -80,16 +84,53 @@ async def transcription_worker():
 
 @app.on_event("startup")
 async def startup_event():
+    # Check for a folder called "Release-1.8.4" (the whisper.cpp)
+    if not os.path.exists("ggml-large-v3-turbo.bin"):
+        logger.log("whisper model not found, preparing download...")
+        model_path = hf_hub_download(
+            repo_id="ggerganov/whisper.cpp",
+            local_dir="./",
+            filename="ggml-large-v3-turbo.bin"  # Target the specific model directory
+        )
+        logger.log(f"downloaded model to: {model_path}")
+
+
+    # Check for (and download) the whisper.cpp cli
+    if not os.path.exists("Release/whisper-cli.exe"):
+        logger.log("whisper-cli.exe not found, downloading whisper.cpp release 1.8.4...")
+        
+        release_url = "https://github.com/ggml-org/whisper.cpp/releases/download/v1.8.4/whisper-bin-x64.zip"
+        zip_path = "whisper-1.8.4.zip"
+        
+        response = requests.get(release_url, stream=True)
+        response.raise_for_status()
+        with open(zip_path, "wb") as f:
+            for chunk in response.iter_content(chunk_size=8192):
+                f.write(chunk)
+        logger.log("Download complete, unpacking...")
+        
+        # Unpack into Release/ folder
+        os.makedirs("Release", exist_ok=True)
+        with zipfile.ZipFile(zip_path, "r") as zip_ref:
+            for member in zip_ref.namelist():
+                # Strip any top-level folder from the zip and extract flat into Release/
+                filename = os.path.basename(member)
+                if not filename:
+                    continue
+                source = zip_ref.open(member)
+                target_path = os.path.join("Release", filename)
+                with open(target_path, "wb") as target:
+                    target.write(source.read())
+        
+        time.sleep(2.5)
+        try:
+            os.remove(zip_path)
+        except Exception as e:
+            logger.log(f"zip removal error: {e}")
+        logger.log("whisper-cli.exe ready in Release/")
+
+
     asyncio.create_task(transcription_worker())
-
-    # Check for a folder called "Release-1.8.4" (the whisper.cpp release)
-    if os.exists("Release\whisper-cli.exe"):
-        pass
-    else:
-
-
-
-
 
 @app.on_event("shutdown")
 def cleanup_queue():

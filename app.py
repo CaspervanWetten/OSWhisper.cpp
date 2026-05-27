@@ -40,7 +40,8 @@ class ConnectionManager:
             try:
                 await connection.send_json(message)
             except Exception as e:
-                logger.error(f"Error broadcasting to connection: {e}")
+                pass
+                # logger.error(f"Error broadcasting to connection: {e}")
 
 manager = ConnectionManager()
 
@@ -64,7 +65,8 @@ async def transcription_worker():
         try:
             await transcribe_audio(encoded_path)
         except Exception as e:
-            logger.error(f"Worker error: {e}")
+            pass
+            # logger.error(f"Worker error: {e}")
         finally:
             currently_transcribing.discard(file_id_base)
             transcription_queue.task_done()
@@ -73,18 +75,18 @@ async def transcription_worker():
 async def startup_event():
     # Check for a folder called "Release-1.8.4" (the whisper.cpp)
     if not os.path.exists("ggml-large-v3-turbo.bin"):
-        logger.log("whisper model not found, preparing download...")
+        # logger.log("whisper model not found, preparing download...")
         model_path = hf_hub_download(
             repo_id="ggerganov/whisper.cpp",
             local_dir="./",
             filename="ggml-large-v3-turbo.bin"  # Target the specific model directory
         )
-        logger.log(f"downloaded model to: {model_path}")
+        # logger.log(f"downloaded model to: {model_path}")
 
 
     # Check for (and download) the whisper.cpp cli
     if not os.path.exists("Release/whisper-cli.exe"):
-        logger.log("whisper-cli.exe not found, downloading whisper.cpp release 1.8.4...")
+        # logger.log("whisper-cli.exe not found, downloading whisper.cpp release 1.8.4...")
         
         release_url = "https://github.com/ggml-org/whisper.cpp/releases/download/v1.8.4/whisper-bin-x64.zip"
         zip_path = "whisper-1.8.4.zip"
@@ -94,7 +96,7 @@ async def startup_event():
         with open(zip_path, "wb") as f:
             for chunk in response.iter_content(chunk_size=8192):
                 f.write(chunk)
-        logger.log("Download complete, unpacking...")
+        # logger.log("Download complete, unpacking...")
         
         # Unpack into Release/ folder
         os.makedirs("Release", exist_ok=True)
@@ -112,8 +114,9 @@ async def startup_event():
         try:
             os.remove(zip_path)
         except Exception as e:
-            logger.log(f"zip removal error: {e}")
-        logger.log("whisper-cli.exe ready in Release/")
+            pass
+            # logger.log(f"zip removal error: {e}")
+        # logger.log("whisper-cli.exe ready in Release/")
 
 
     asyncio.create_task(transcription_worker())
@@ -142,7 +145,7 @@ async def transcribe_audio(encoded_path: str):
         "-of", output_base
     ]
 
-    logger.info(f"starting transcription of {encoded_path}")
+    # logger.info(f"starting transcription of {encoded_path}")
     
     try:      
         process = await asyncio.create_subprocess_exec(
@@ -153,7 +156,7 @@ async def transcribe_audio(encoded_path: str):
         stdout, stderr = await process.communicate()
         
         if process.returncode == 0:
-            logger.info(f"Transcribed file {encoded_path} to .txt")
+            # logger.info(f"Transcribed file {encoded_path} to .txt")
             # Cleanup queue file after success
             if os.path.exists(encoded_path):
                 os.remove(encoded_path)
@@ -163,14 +166,14 @@ async def transcribe_audio(encoded_path: str):
                 "status": "transcribed"
             })
         else:
-            logger.error(f"Whisper error: {stderr.decode()}")
+            # logger.error(f"Whisper error: {stderr.decode()}")
             await manager.broadcast({
                 "type": "error",
                 "message": f"Whisper error: {stderr.decode()}"
             })
 
     except Exception as e:
-        logger.error(f"Transcription error: {str(e)}")
+        # logger.error(f"Transcription error: {str(e)}")
         await manager.broadcast({
             "type": "error",
             "message": f"Transcription error: {str(e)}"
@@ -187,9 +190,10 @@ async def queue_file(filename_base: str):
     if os.path.exists(input_path):
         shutil.copy(input_path, queue_path)
         await transcription_queue.put((queue_path, filename_base))
-        logger.info(f"Queued file: {filename_base}")
+        # logger.info(f"Queued file: {filename_base}")
     else:
-        logger.error(f"File not found for queueing: {input_path}")
+        pass
+        # logger.error(f"File not found for queueing: {input_path}")
 
 
 
@@ -213,7 +217,7 @@ async def encode_audio(input_path: str, output_path: str):
         stdout, stderr = await process.communicate()
         
         if process.returncode == 0:
-            logger.info(f"re-encoded file {input_path} to 16khz .wav")
+            # logger.info(f"re-encoded file {input_path} to 16khz .wav")
             if os.path.exists(input_path):
                 os.remove(input_path)
             
@@ -224,7 +228,7 @@ async def encode_audio(input_path: str, output_path: str):
             })
         else:
             error_msg = stderr.decode().split('\n')[-2] if stderr else "Unknown ffmpeg error"
-            logger.error(f"ffmpeg error re-encoding {input_path}: {error_msg}")
+            # logger.error(f"ffmpeg error re-encoding {input_path}: {error_msg}")
             
             # Clean up input path even on failure to avoid clutter
             if os.path.exists(input_path):
@@ -236,7 +240,7 @@ async def encode_audio(input_path: str, output_path: str):
             })
 
     except Exception as e:
-        logger.error(f"Unexpected error in encode_audio: {e}")
+        # logger.error(f"Unexpected error in encode_audio: {e}")
         if os.path.exists(input_path):
             os.remove(input_path)
         await manager.broadcast({
@@ -251,7 +255,7 @@ async def index(request: Request):
 @app.post("/upload")
 async def upload_file(file: UploadFile = File(...)):
     filename = file.filename
-    logger.info(f"received file {filename} via HTTP")
+    # logger.info(f"received file {filename} via HTTP")
     
     if not filename:
         return {"error": "No filename provided"}
@@ -272,7 +276,7 @@ async def upload_file(file: UploadFile = File(...)):
         
         return {"status": "ok", "filename": filename, "file_id": file_id}
     except Exception as e:
-        logger.error(f"Upload processing error: {e}")
+        # logger.error(f"Upload processing error: {e}")
         return {"error": str(e)}
 
 @app.websocket("/ws")
@@ -290,7 +294,7 @@ async def websocket_endpoint(websocket: WebSocket):
                         # Legacy/small file upload via WS (optional, but we'll prioritize HTTP)
                         filename = data.get("filename")
                         content_b64 = data.get("content")
-                        logger.info(f"received file {filename} via WS")
+                        # logger.info(f"received file {filename} via WS")
 
                         if filename and content_b64:
                             file_id = str(uuid.uuid4())[:8]
@@ -305,7 +309,7 @@ async def websocket_endpoint(websocket: WebSocket):
                                 await manager.broadcast({"type": "status", "message": f"Uploaded {filename}. Encoding..."})
                                 asyncio.create_task(encode_audio(filepath, output_path))
                             except Exception as e:
-                                logger.error(f"Upload processing error: {e}")
+                                # logger.error(f"Upload processing error: {e}")
                                 await websocket.send_json({"type": "error", "message": f"Failed to process upload: {str(e)}"})
                     case "queue":
                         filename = data.get("filename")
@@ -316,22 +320,22 @@ async def websocket_endpoint(websocket: WebSocket):
                     case "ping":
                         await websocket.send_json({"type": "pong"})
             except (ValueError, json.JSONDecodeError) as e:
-                logger.error(f"Invalid JSON received: {e}")
+                # logger.error(f"Invalid JSON received: {e}")
                 continue
             except Exception as e:
                 if isinstance(e, WebSocketDisconnect):
                     raise
-                logger.error(f"Error processing websocket message: {e}")
+                # logger.error(f"Error processing websocket message: {e}")
                 try:
                     await websocket.send_json({"type": "error", "message": "Internal server error processing message"})
                 except:
                     pass
     except WebSocketDisconnect:
         manager.disconnect(websocket)
-        logger.info("Client disconnected")
+        # logger.info("Client disconnected")
     except Exception as e:
         manager.disconnect(websocket)
-        logger.error(f"WS Error: {e}")
+        # logger.error(f"WS Error: {e}")
 
 @app.get("/files")
 @app.get("/list_files")

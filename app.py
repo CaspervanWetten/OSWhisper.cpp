@@ -8,7 +8,6 @@ import logging
 import json
 import requests
 import zipfile
-import time
 from fastapi import FastAPI, UploadFile, File, Request, Depends, WebSocket, WebSocketDisconnect
 from fastapi.templating import Jinja2Templates
 from fastapi.responses import RedirectResponse, FileResponse
@@ -22,19 +21,7 @@ os.makedirs("encoded", exist_ok=True)
 os.makedirs("queue", exist_ok=True)
 os.makedirs("static", exist_ok=True)
 
-def setup_logging():
-    fmt = "%(levelname)-9s %(name)s - %(message)s"
-    logging.basicConfig(
-        level=logging.INFO,
-        format=fmt,
-        handlers=[
-            logging.StreamHandler(),
-            logging.FileHandler("app.log", encoding="utf-8")
-        ]
-    )
 
-setup_logging()
-logger = logging.getLogger("uvicorn.info")
 
 class ConnectionManager:
     def __init__(self):
@@ -122,7 +109,6 @@ async def startup_event():
                 with open(target_path, "wb") as target:
                     target.write(source.read())
         
-        time.sleep(2.5)
         try:
             os.remove(zip_path)
         except Exception as e:

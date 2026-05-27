@@ -5,3 +5,4 @@ python-dotenv>=1.0.0
 websockets>=16.0
 python-multipart==0.0.29
 requests==2.34.2
+huggingface-hub>=1.16.1
